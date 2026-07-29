@@ -29,13 +29,6 @@ PROVIDERS = {
         "env": "OPENAI_API_KEY",
         "vision": True,
     },
-    "Llama 3.2 (local, free)": {
-        "id": "ollama",
-        "model": "llama3.2",
-        "fallbacks": [],
-        "env": None,
-        "vision": False,
-    },
 }
 
 
@@ -159,27 +152,12 @@ def stream_gemini(messages, model, image=None, image_name=None):
             yield chunk.text
 
 
-# ---------- Ollama (local) ----------
-
-def stream_ollama(messages, model, image=None, image_name=None):
-    import ollama
-
-    payload = [dict(m) for m in messages]
-    if image and payload:
-        payload[-1]["images"] = [image]
-
-    stream = ollama.chat(model=model, messages=payload, stream=True)
-    for chunk in stream:
-        yield chunk["message"]["content"]
-
-
 # ---------- Dispatcher ----------
 
 STREAMERS = {
     "anthropic": stream_anthropic,
     "openai": stream_openai,
     "gemini": stream_gemini,
-    "ollama": stream_ollama,
 }
 
 
