@@ -3,6 +3,7 @@
 import os
 import streamlit as st
 from supabase import create_client
+from supabase.lib.client_options import ClientOptions
 
 
 def _secret(name, default=None):
@@ -23,7 +24,10 @@ def get_client():
     if not url or not key:
         st.error("Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY.")
         st.stop()
-    return create_client(url, key)
+    return create_client(
+        url, key,
+        options=ClientOptions(flow_type="implicit"),
+    )
 
 
 def _site_url():
@@ -48,19 +52,37 @@ def sign_out():
 
 
 def _restore_session_from_url():
-    """Pick up the access token Supabase puts in the URL after Google login."""
+    """Finish the OAuth handshake using whatever Supabase put in the URL."""
     params = st.query_params
+
+    # Implicit flow — token arrives directly
     token = params.get("access_token")
-    if not token:
-        return False
-    try:
-        result = get_client().auth.get_user(token)
-        if result and result.user:
-            st.session_state.user = result.user
+    if token:
+        try:
+            result = get_client().auth.get_user(token)
+            if result and result.user:
+                st.session_state.user = result.user
+                st.query_params.clear()
+                return True
+        except Exception as e:
+            st.error(f"Couldn't complete sign-in: {e}")
             st.query_params.clear()
-            return True
-    except Exception:
-        pass
+        return False
+
+    # PKCE flow — exchange the code for a session
+    code = params.get("code")
+    if code:
+        try:
+            result = get_client().auth.exchange_code_for_session({"auth_code": code})
+            if result and result.user:
+                st.session_state.user = result.user
+                st.query_params.clear()
+                return True
+        except Exception as e:
+            st.error(f"Couldn't complete sign-in: {e}")
+            st.query_params.clear()
+        return False
+
     return False
 
 
