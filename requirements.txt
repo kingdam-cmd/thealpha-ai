@@ -1,0 +1,7 @@
+streamlit
+anthropic
+openai
+google-genai
+pypdf
+python-docx
+python-dotenv
