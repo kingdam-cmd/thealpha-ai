@@ -164,7 +164,10 @@ with st._bottom:
         file_type=["pdf", "docx", "txt", "md", "csv", "png", "jpg", "jpeg", "webp", "gif"],
     )
 
-    options = list(PROVIDERS.keys())
+    options = [k for k in PROVIDERS if has_key(k)] or list(PROVIDERS.keys())
+    if st.session_state.provider not in options:
+        st.session_state.provider = options[0]
+
     pcol, scol = st.columns([1, 2])
     with pcol:
         st.session_state.provider = st.selectbox(
