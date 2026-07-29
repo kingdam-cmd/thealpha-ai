@@ -1,53 +1,18 @@
 from pypdf import PdfReader
 import streamlit as st
-import json
 import os
 import docx
-from datetime import datetime
 from dotenv import load_dotenv
 
 from prompts import SYSTEM_PROMPT
 from providers import PROVIDERS, has_key, stream_reply
-from auth import check_password
+from auth import require_login, current_user, sign_out
+import db
 
 load_dotenv()
 
-CHATS_DIR = "chats"
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 MAX_DOC_CHARS = 150_000
-
-os.makedirs(CHATS_DIR, exist_ok=True)
-
-
-# ---------- Storage ----------
-
-def list_chats():
-    files = [f for f in os.listdir(CHATS_DIR) if f.endswith(".json")]
-    return sorted(files, reverse=True)
-
-
-def save_chat(chat_id, messages):
-    with open(os.path.join(CHATS_DIR, chat_id), "w", encoding="utf-8") as f:
-        json.dump(messages, f, indent=2)
-
-
-def load_chat(chat_id):
-    with open(os.path.join(CHATS_DIR, chat_id), "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def new_chat_id():
-    return datetime.now().strftime("%Y%m%d-%H%M%S") + ".json"
-
-
-def chat_title(chat_id):
-    try:
-        for m in load_chat(chat_id):
-            if m["role"] == "user":
-                return m["content"][:35]
-    except Exception:
-        pass
-    return "Empty chat"
 
 
 # ---------- Documents ----------
@@ -90,17 +55,30 @@ def clear_image():
     st.session_state.image_name = None
 
 
+def start_new_chat():
+    st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    st.session_state.chat_id = None
+    clear_document()
+    clear_image()
+
+
+def derive_title(messages):
+    for m in messages:
+        if m["role"] == "user":
+            return m["content"][:60]
+    return "New chat"
+
+
 # ---------- Page setup ----------
 
 st.set_page_config(page_title="TheAlpha AI", page_icon="logo.png", layout="centered")
 
-if not check_password():
-    st.stop()
+user = require_login()
 
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 if "chat_id" not in st.session_state:
-    st.session_state.chat_id = new_chat_id()
+    st.session_state.chat_id = None
 if "provider" not in st.session_state:
     available = [k for k in PROVIDERS if has_key(k)]
     st.session_state.provider = available[0] if available else list(PROVIDERS)[0]
@@ -111,22 +89,35 @@ if "provider" not in st.session_state:
 with st.sidebar:
     st.image("logo.png", width=80)
     st.markdown("### TheAlpha AI")
+    st.caption(user.email)
 
     if st.button("New chat", use_container_width=True):
-        st.session_state.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        st.session_state.chat_id = new_chat_id()
-        clear_document()
-        clear_image()
+        start_new_chat()
         st.rerun()
 
     st.divider()
     st.caption("History")
 
-    for cid in list_chats():
-        if st.button(chat_title(cid), key=cid, use_container_width=True):
-            st.session_state.messages = load_chat(cid)
-            st.session_state.chat_id = cid
+    for chat in db.list_chats(user.id):
+        row1, row2 = st.columns([5, 1])
+        label = chat.get("title") or "Untitled"
+        if row1.button(label, key=f"open_{chat['id']}", use_container_width=True):
+            messages = db.load_chat(chat["id"])
+            if messages:
+                st.session_state.messages = messages
+                st.session_state.chat_id = chat["id"]
+                clear_document()
+                clear_image()
+                st.rerun()
+        if row2.button("🗑", key=f"del_{chat['id']}"):
+            db.delete_chat(chat["id"])
+            if st.session_state.chat_id == chat["id"]:
+                start_new_chat()
             st.rerun()
+
+    st.divider()
+    if st.button("Sign out", use_container_width=True):
+        sign_out()
 
 
 # ---------- Main chat ----------
@@ -176,10 +167,7 @@ with st._bottom:
             label_visibility="collapsed",
         )
     with scol:
-        if has_key(st.session_state.provider):
-            st.caption(PROVIDERS[st.session_state.provider]["model"])
-        else:
-            st.caption(f"⚠️ Add {PROVIDERS[st.session_state.provider]['env']}")
+        st.caption(PROVIDERS[st.session_state.provider]["model"])
 
 
 # ---------- Handle input ----------
@@ -242,6 +230,12 @@ if user_input:
                 st.error(reply)
 
         st.session_state.messages.append({"role": "assistant", "content": reply})
-        save_chat(st.session_state.chat_id, st.session_state.messages)
+
+        st.session_state.chat_id = db.save_chat(
+            st.session_state.chat_id,
+            user.id,
+            derive_title(st.session_state.messages),
+            st.session_state.messages,
+        )
 
     st.rerun()
