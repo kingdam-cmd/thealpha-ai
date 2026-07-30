@@ -83,4 +83,3 @@ websockets==15.0.1
 yarl==1.24.5
 fpdf2
 openpyxl
-extra-streamlit-components

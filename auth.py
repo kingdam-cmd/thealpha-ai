@@ -1,17 +1,19 @@
 """Real authentication via Supabase — email/password and Google.
 
-Sessions persist across visits: when someone signs in, their Supabase
-refresh token is stored in a browser cookie. On their next visit that
-token is exchanged for a fresh session, so they land straight in the app.
-Signing out deletes the cookie.
+Sessions persist across visits. When someone signs in, their Supabase
+refresh token is written to a browser cookie by a small piece of
+JavaScript. On their next visit Streamlit reads that cookie directly
+(synchronously, via st.context.cookies) and exchanges the token for a
+fresh session, so they land straight in the app. Signing out clears it.
 """
 
 import os
-import datetime
+import time
+import json
 
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import create_client
-import extra_streamlit_components as stx
 
 COOKIE_NAME = "alpha_refresh"
 COOKIE_DAYS = 30
@@ -38,35 +40,59 @@ def get_client():
     return create_client(url, key)
 
 
-def cookies():
-    """One cookie manager per session. Deliberately not cached — the
-    manager renders a hidden widget, and Streamlit forbids widgets
-    inside cached functions. Session state keeps it stable per user."""
-    if "cookie_manager" not in st.session_state:
-        st.session_state.cookie_manager = stx.CookieManager(key="alpha_cookies")
-    return st.session_state.cookie_manager
+def _read_cookie(name):
+    """Read a cookie the browser sent with this request. Synchronous —
+    no waiting on a component to report back."""
+    try:
+        return st.context.cookies.get(name)
+    except Exception:
+        return None
+
+
+def _write_cookie(name, value, days):
+    """Set a cookie on the real page. Component iframes are same-origin
+    in Streamlit, so writing to the parent document works."""
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const d = new Date();
+            d.setTime(d.getTime() + ({days} * 24 * 60 * 60 * 1000));
+            window.parent.document.cookie =
+                {json.dumps(name)} + "=" + {json.dumps(value)} +
+                ";expires=" + d.toUTCString() +
+                ";path=/;SameSite=Lax";
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def _clear_cookie(name):
+    components.html(
+        f"""
+        <script>
+        window.parent.document.cookie =
+            {json.dumps(name)} + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
+        </script>
+        """,
+        height=0,
+    )
 
 
 def _remember(session):
     """Store the refresh token so the next visit skips the login screen."""
-    if not session or not session.refresh_token:
+    if not session or not getattr(session, "refresh_token", None):
         return
-    try:
-        cookies().set(
-            COOKIE_NAME,
-            session.refresh_token,
-            expires_at=datetime.datetime.now() + datetime.timedelta(days=COOKIE_DAYS),
-            key="set_alpha_cookie",
-        )
-    except Exception:
-        pass
+    _write_cookie(COOKIE_NAME, session.refresh_token, COOKIE_DAYS)
+    # Give the browser a moment to store it before any rerun.
+    time.sleep(0.3)
 
 
 def _forget():
-    try:
-        cookies().delete(COOKIE_NAME, key="del_alpha_cookie")
-    except Exception:
-        pass
+    _clear_cookie(COOKIE_NAME)
+    time.sleep(0.2)
 
 
 def _site_url():
@@ -110,7 +136,7 @@ def sign_out():
     except Exception:
         pass
     for key in ["user", "messages", "chat_id", "doc_text", "doc_name",
-                "image_bytes", "image_name"]:
+                "image_bytes", "image_name", "cookie_checked"]:
         st.session_state.pop(key, None)
     st.rerun()
 
@@ -121,7 +147,7 @@ def _restore_from_cookie():
         return False
     st.session_state.cookie_checked = True
 
-    token = cookies().get(COOKIE_NAME)
+    token = _read_cookie(COOKIE_NAME)
     if not token:
         return False
 
@@ -129,6 +155,7 @@ def _restore_from_cookie():
         result = get_client().auth.refresh_session(token)
         if result and result.user:
             st.session_state.user = result.user
+            # Supabase rotates refresh tokens, so save the new one.
             _remember(result.session)
             return True
     except Exception:

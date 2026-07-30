@@ -13,8 +13,7 @@ from dotenv import load_dotenv
 from prompts import SYSTEM_PROMPT
 from providers import PROVIDERS, has_key, stream_reply
 from auth import (
-    require_login, current_user, sign_out, display_name, update_display_name,
-    cookies,
+    require_login, current_user, sign_out, display_name, update_display_name
 )
 from generate import extract_generated_files
 import db
@@ -388,10 +387,6 @@ def process_prompt(prompt):
 # ---------- Page setup ----------
 
 st.set_page_config(page_title="TheAlpha AI", page_icon="logo.png", layout="centered")
-
-# The cookie manager has to render once before anything reads a cookie,
-# otherwise the browser hasn't sent them back yet.
-cookies()
 
 user = require_login()
 
