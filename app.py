@@ -138,7 +138,7 @@ div[data-testid="stBottom"] div[data-testid="stVerticalBlock"] { gap: 0.25rem; }
 </style>
 """, unsafe_allow_html=True)
 
-with st._bottom:
+with st.bottom():
     attached = st.session_state.get("doc_name") or st.session_state.get("image_name")
     if attached:
         acol1, acol2 = st.columns([6, 1])
