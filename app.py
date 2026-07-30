@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 from prompts import SYSTEM_PROMPT
 from providers import PROVIDERS, has_key, stream_reply
 from auth import (
-    require_login, current_user, sign_out, display_name, update_display_name
+    require_login, current_user, sign_out, display_name, update_display_name,
+    cookies,
 )
 from generate import extract_generated_files
 import db
@@ -388,6 +389,10 @@ def process_prompt(prompt):
 
 st.set_page_config(page_title="TheAlpha AI", page_icon="logo.png", layout="centered")
 
+# The cookie manager has to render once before anything reads a cookie,
+# otherwise the browser hasn't sent them back yet.
+cookies()
+
 user = require_login()
 
 if "messages" not in st.session_state:
@@ -411,6 +416,35 @@ if "custom_base" not in st.session_state:
 if "voice" in st.query_params:
     st.session_state.pending_prompt = st.query_params.get("voice")
     st.query_params.clear()
+
+
+# ---------- Make it installable on phones ----------
+
+components.html(
+    """
+    <script>
+    const head = window.parent.document.head;
+
+    function addTag(tag, attrs) {
+        for (const [k, v] of Object.entries(attrs)) {
+            const existing = head.querySelector(`${tag}[${k}="${v}"]`);
+            if (existing) return;
+        }
+        const el = window.parent.document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+        head.appendChild(el);
+    }
+
+    addTag('link', {rel: 'manifest', href: '/app/static/manifest.json'});
+    addTag('link', {rel: 'apple-touch-icon', href: '/app/static/icon-192.png'});
+    addTag('meta', {name: 'apple-mobile-web-app-capable', content: 'yes'});
+    addTag('meta', {name: 'apple-mobile-web-app-title', content: 'Alpha'});
+    addTag('meta', {name: 'apple-mobile-web-app-status-bar-style', content: 'default'});
+    addTag('meta', {name: 'theme-color', content: '#7D1B5D'});
+    </script>
+    """,
+    height=0,
+)
 
 
 # ---------- Fonts + themed styling ----------
@@ -595,14 +629,20 @@ with st.sidebar:
             "Controls this computer by voice — opens apps, types, "
             "takes screenshots, sleeps or locks the machine."
         )
-        if IS_LOCAL:
+        premium = db.is_premium(user.id)
+        if premium:
+            st.success("Premium — you have access.")
+        else:
+            st.warning("Premium feature. Contact us to upgrade.")
+
+        if IS_LOCAL and premium:
             if st.button("Launch Alpha Desktop", use_container_width=True):
                 try:
                     launch_desktop_assistant()
                     st.success("Opened in a new window.")
                 except Exception as e:
                     st.error(f"Couldn't start it: {e}")
-        else:
+        elif not IS_LOCAL and premium:
             st.info(
                 "Alpha Desktop runs on your own computer, so it can't be "
                 "started from the web. Download the project and run "

@@ -1,8 +1,20 @@
-"""Real authentication via Supabase — email/password and Google."""
+"""Real authentication via Supabase — email/password and Google.
+
+Sessions persist across visits: when someone signs in, their Supabase
+refresh token is stored in a browser cookie. On their next visit that
+token is exchanged for a fresh session, so they land straight in the app.
+Signing out deletes the cookie.
+"""
 
 import os
+import datetime
+
 import streamlit as st
 from supabase import create_client
+import extra_streamlit_components as stx
+
+COOKIE_NAME = "alpha_refresh"
+COOKIE_DAYS = 30
 
 
 def _secret(name, default=None):
@@ -24,6 +36,37 @@ def get_client():
         st.error("Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY.")
         st.stop()
     return create_client(url, key)
+
+
+def cookies():
+    """One cookie manager per session. Deliberately not cached — the
+    manager renders a hidden widget, and Streamlit forbids widgets
+    inside cached functions. Session state keeps it stable per user."""
+    if "cookie_manager" not in st.session_state:
+        st.session_state.cookie_manager = stx.CookieManager(key="alpha_cookies")
+    return st.session_state.cookie_manager
+
+
+def _remember(session):
+    """Store the refresh token so the next visit skips the login screen."""
+    if not session or not session.refresh_token:
+        return
+    try:
+        cookies().set(
+            COOKIE_NAME,
+            session.refresh_token,
+            expires_at=datetime.datetime.now() + datetime.timedelta(days=COOKIE_DAYS),
+            key="set_alpha_cookie",
+        )
+    except Exception:
+        pass
+
+
+def _forget():
+    try:
+        cookies().delete(COOKIE_NAME, key="del_alpha_cookie")
+    except Exception:
+        pass
 
 
 def _site_url():
@@ -61,6 +104,7 @@ def update_display_name(new_name):
 
 
 def sign_out():
+    _forget()
     try:
         get_client().auth.sign_out()
     except Exception:
@@ -69,6 +113,28 @@ def sign_out():
                 "image_bytes", "image_name"]:
         st.session_state.pop(key, None)
     st.rerun()
+
+
+def _restore_from_cookie():
+    """Turn a stored refresh token back into a live session."""
+    if st.session_state.get("cookie_checked"):
+        return False
+    st.session_state.cookie_checked = True
+
+    token = cookies().get(COOKIE_NAME)
+    if not token:
+        return False
+
+    try:
+        result = get_client().auth.refresh_session(token)
+        if result and result.user:
+            st.session_state.user = result.user
+            _remember(result.session)
+            return True
+    except Exception:
+        # Token expired or was revoked — clear it and show the login screen.
+        _forget()
+    return False
 
 
 def _restore_session_from_url():
@@ -82,6 +148,13 @@ def _restore_session_from_url():
             result = get_client().auth.get_user(token)
             if result and result.user:
                 st.session_state.user = result.user
+                refresh = params.get("refresh_token")
+                if refresh:
+                    try:
+                        refreshed = get_client().auth.refresh_session(refresh)
+                        _remember(refreshed.session)
+                    except Exception:
+                        pass
                 st.query_params.clear()
                 return True
         except Exception as e:
@@ -96,6 +169,7 @@ def _restore_session_from_url():
             result = get_client().auth.exchange_code_for_session({"auth_code": code})
             if result and result.user:
                 st.session_state.user = result.user
+                _remember(result.session)
                 st.query_params.clear()
                 return True
         except Exception as e:
@@ -132,6 +206,7 @@ def _login_form():
                 )
                 if result.user:
                     st.session_state.user = result.user
+                    _remember(result.session)
                     st.rerun()
             except Exception as e:
                 st.error(f"Couldn't sign in: {e}")
@@ -191,6 +266,9 @@ def require_login():
         return current_user()
 
     if _restore_session_from_url():
+        return current_user()
+
+    if _restore_from_cookie():
         return current_user()
 
     _login_form()

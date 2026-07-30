@@ -68,6 +68,22 @@ def delete_chat(chat_id):
         return False
 
 
+def is_premium(user_id):
+    """Whether this account has Alpha Desktop access."""
+    try:
+        result = (
+            get_client()
+            .table("profiles")
+            .select("is_premium")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        return bool(result.data and result.data.get("is_premium"))
+    except Exception:
+        return False
+
+
 def usage_stats(user_id):
     """Total chats and total messages for one user."""
     try:
