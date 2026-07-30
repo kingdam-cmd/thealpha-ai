@@ -3,7 +3,6 @@
 import os
 import streamlit as st
 from supabase import create_client
-from supabase.lib.client_options import ClientOptions
 
 
 def _secret(name, default=None):
@@ -24,10 +23,7 @@ def get_client():
     if not url or not key:
         st.error("Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY.")
         st.stop()
-    return create_client(
-        url, key,
-        options=ClientOptions(flow_type="implicit"),
-    )
+    return create_client(url, key)
 
 
 def _site_url():
