@@ -1,8 +1,12 @@
 """
 Alpha — the desktop assistant for TheAlpha.
 
-Runs on YOUR laptop (not on Render). Takes a plain-English instruction,
-asks the AI what it means, then carries it out on this machine.
+Runs on YOUR laptop. Takes a plain-English instruction, asks the AI what
+it means, then carries it out on this machine.
+
+This version holds no API key. It signs you in with your TheAlpha AI
+account and sends requests through the Alpha proxy, which checks that
+your account has premium access.
 
 Run it with:  python alpha_desktop.py
 
@@ -15,18 +19,25 @@ While it's running:
 
 import os
 import json
+import getpass
 import subprocess
 import webbrowser
 import urllib.parse
 
+import requests
 import pyautogui
 import pyttsx3
-from anthropic import Anthropic
+from supabase import create_client
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = "claude-sonnet-4-5"
+# These two are safe to ship — the anon key is public by design.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+
+# Your deployed proxy. Change this to your real proxy address.
+PROXY_URL = os.getenv("PROXY_URL", "https://alpha-proxy.onrender.com")
 
 # Voice input is optional — Alpha still works by typing if these fail to import.
 try:
@@ -97,12 +108,35 @@ User: open notepad and write hello
 
 class Alpha:
     def __init__(self):
-        key = os.getenv("ANTHROPIC_API_KEY")
-        if not key:
-            raise SystemExit("No ANTHROPIC_API_KEY found in your .env file.")
-        self.client = Anthropic(api_key=key)
+        if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+            raise SystemExit(
+                "Missing SUPABASE_URL or SUPABASE_ANON_KEY in your .env file."
+            )
+        self.supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        self.token = None
         self.voice_input = False
         self.recognizer = sr.Recognizer() if VOICE_INPUT_AVAILABLE else None
+
+    # ---------- signing in ----------
+
+    def sign_in(self):
+        """Ask for the same credentials used on TheAlpha AI website."""
+        print("Sign in with your TheAlpha AI account.\n")
+        for attempt in range(3):
+            email = input("Email: ").strip()
+            password = getpass.getpass("Password: ")
+            try:
+                result = self.supabase.auth.sign_in_with_password(
+                    {"email": email, "password": password}
+                )
+                if result.session:
+                    self.token = result.session.access_token
+                    print("\nSigned in.\n")
+                    return True
+            except Exception as e:
+                print(f"Couldn't sign in: {e}\n")
+        print("Too many failed attempts.")
+        return False
 
     # ---------- speech out ----------
 
@@ -122,9 +156,7 @@ class Alpha:
     # ---------- speech in ----------
 
     def listen(self):
-        """Record a few seconds from the microphone and transcribe it.
-        Uses sounddevice rather than pyaudio — it ships pre-built, so it
-        installs without needing a C++ compiler on Windows."""
+        """Record a few seconds from the microphone and transcribe it."""
         if not VOICE_INPUT_AVAILABLE:
             print("   [voice input not installed]")
             return ""
@@ -153,14 +185,36 @@ class Alpha:
     # ---------- understanding ----------
 
     def interpret(self, instruction):
-        """Ask the AI to turn plain English into a structured command."""
-        resp = self.client.messages.create(
-            model=MODEL,
-            max_tokens=500,
-            system=INSTRUCTION,
-            messages=[{"role": "user", "content": instruction}],
-        )
-        raw = "".join(b.text for b in resp.content if b.type == "text").strip()
+        """Ask the proxy to turn plain English into a structured command."""
+        try:
+            resp = requests.post(
+                f"{PROXY_URL}/chat",
+                headers={"Authorization": f"Bearer {self.token}"},
+                json={
+                    "system": INSTRUCTION,
+                    "messages": [{"role": "user", "content": instruction}],
+                    "max_tokens": 500,
+                },
+                timeout=90,
+            )
+        except requests.RequestException as e:
+            return {"action": "say", "speech": f"I couldn't reach the server. {e}"}
+
+        if resp.status_code == 403:
+            return {
+                "action": "say",
+                "speech": "Alpha Desktop is a premium feature. "
+                          "Upgrade your account to use it.",
+            }
+        if resp.status_code == 401:
+            return {
+                "action": "say",
+                "speech": "Your session expired. Restart Alpha and sign in again.",
+            }
+        if resp.status_code != 200:
+            return {"action": "say", "speech": "The server had a problem."}
+
+        raw = resp.json().get("text", "").strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         try:
             return json.loads(raw)
@@ -257,6 +311,9 @@ class Alpha:
             return "quit"
 
     def run(self):
+        if not self.sign_in():
+            return
+
         self.say("Alpha online.")
         if not VOICE_INPUT_AVAILABLE:
             print("(Voice input isn't installed — typing only for now.)")
