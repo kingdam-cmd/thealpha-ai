@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+anthropic
+supabase==2.31.0
+pydantic

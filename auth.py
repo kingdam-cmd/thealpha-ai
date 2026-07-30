@@ -36,6 +36,30 @@ def current_user():
     return st.session_state.get("user")
 
 
+def display_name(user):
+    """The best name we have for this user: their chosen name if set,
+    Google's name if they signed in that way, otherwise a fallback
+    derived from their email."""
+    meta = getattr(user, "user_metadata", None) or {}
+    name = meta.get("full_name") or meta.get("name")
+    if name:
+        return name.strip()
+
+    local = user.email.split("@")[0]
+    for sep in (".", "_", "-"):
+        local = local.replace(sep, " ")
+    return local.strip().title() or "there"
+
+
+def update_display_name(new_name):
+    """Save a new display name to the signed-in user's Supabase profile."""
+    result = get_client().auth.update_user({"data": {"full_name": new_name.strip()}})
+    if result and result.user:
+        st.session_state.user = result.user
+        return True
+    return False
+
+
 def sign_out():
     try:
         get_client().auth.sign_out()
@@ -131,6 +155,11 @@ def _login_form():
             st.caption(f"Google sign-in unavailable: {e}")
 
     with tab_up:
+        name = st.text_input(
+            "Name",
+            key="up_name",
+            placeholder="How should we greet you?",
+        )
         email = st.text_input("Email", key="up_email")
         password = st.text_input(
             "Password", type="password", key="up_pw",
@@ -138,11 +167,17 @@ def _login_form():
         )
 
         if st.button("Create account", use_container_width=True, type="primary"):
-            if len(password) < 6:
+            if not name.strip():
+                st.error("Enter a name so we know what to call you.")
+            elif len(password) < 6:
                 st.error("Password must be at least 6 characters.")
             else:
                 try:
-                    client.auth.sign_up({"email": email, "password": password})
+                    client.auth.sign_up({
+                        "email": email,
+                        "password": password,
+                        "options": {"data": {"full_name": name.strip()}},
+                    })
                     st.success(
                         "Account created. Check your email to confirm, then sign in."
                     )

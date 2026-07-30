@@ -66,3 +66,25 @@ def delete_chat(chat_id):
     except Exception as e:
         st.error(f"Couldn't delete chat: {e}")
         return False
+
+
+def usage_stats(user_id):
+    """Total chats and total messages for one user."""
+    try:
+        result = (
+            get_client()
+            .table("chats")
+            .select("messages")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        rows = result.data or []
+        total_chats = len(rows)
+        total_messages = 0
+        for row in rows:
+            msgs = row.get("messages") or []
+            # skip the system prompt that sits at index 0 of every chat
+            total_messages += max(0, len(msgs) - 1)
+        return {"chats": total_chats, "messages": total_messages}
+    except Exception:
+        return {"chats": 0, "messages": 0}
