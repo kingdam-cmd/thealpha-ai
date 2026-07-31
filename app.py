@@ -382,6 +382,7 @@ def process_prompt(prompt):
         derive_title(st.session_state.messages),
         st.session_state.messages,
     )
+    db.refresh_caches()
 
 
 # ---------- Page setup ----------
@@ -607,6 +608,7 @@ with st.sidebar:
                 st.rerun()
         if row2.button("🗑", key=f"del_{chat['id']}"):
             db.delete_chat(chat["id"])
+            db.refresh_caches()
             if st.session_state.chat_id == chat["id"]:
                 start_new_chat()
             st.rerun()
@@ -734,12 +736,16 @@ else:
         st.markdown("## TheAlpha AI")
         st.caption("Your personal AI assistant.")
 
-    for i, msg in enumerate(st.session_state.messages[1:]):
+    history = st.session_state.messages[1:]
+    last_index = len(history) - 1
+    for i, msg in enumerate(history):
         render_bubble(msg["role"], msg["content"])
-        if msg["role"] == "assistant":
+        # Each Listen button is an embedded frame. Rendering one per reply
+        # makes long chats crawl, so only the latest reply gets one.
+        if msg["role"] == "assistant" and i == last_index:
             render_speak_button(msg["content"], key=f"speak_hist_{i}")
-            if msg.get("files"):
-                render_files(msg["files"], key_prefix=f"hist_{i}")
+        if msg["role"] == "assistant" and msg.get("files"):
+            render_files(msg["files"], key_prefix=f"hist_{i}")
 
 
 # ---------- Bottom bar ----------

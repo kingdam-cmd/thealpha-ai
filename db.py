@@ -4,6 +4,7 @@ import streamlit as st
 from auth import get_client
 
 
+@st.cache_data(ttl=20, show_spinner=False)
 def list_chats(user_id):
     """Chat summaries for one user, newest first."""
     try:
@@ -68,6 +69,7 @@ def delete_chat(chat_id):
         return False
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def is_premium(user_id):
     """Whether this account has Alpha Desktop access."""
     try:
@@ -76,16 +78,21 @@ def is_premium(user_id):
             .table("profiles")
             .select("is_premium")
             .eq("id", user_id)
-            .single()
+            .limit(1)
             .execute()
         )
-        return bool(result.data and result.data.get("is_premium"))
+        rows = result.data or []
+        return bool(rows and rows[0].get("is_premium"))
     except Exception:
         return False
 
 
+@st.cache_data(ttl=120, show_spinner=False)
 def usage_stats(user_id):
-    """Total chats and total messages for one user."""
+    """Total chats and total messages for one user.
+
+    Counting messages means reading them all, which is the heaviest query
+    in the app — so it's cached rather than run on every rerun."""
     try:
         result = (
             get_client()
@@ -104,3 +111,13 @@ def usage_stats(user_id):
         return {"chats": total_chats, "messages": total_messages}
     except Exception:
         return {"chats": 0, "messages": 0}
+
+
+def refresh_caches():
+    """Drop cached reads after a change, so the sidebar and stats don't
+    show stale numbers."""
+    for fn in (list_chats, usage_stats):
+        try:
+            fn.clear()
+        except Exception:
+            pass
