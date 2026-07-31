@@ -22,7 +22,14 @@ from pydantic import BaseModel
 from anthropic import Anthropic
 from supabase import create_client
 
-MODEL = "claude-sonnet-4-5"
+DEFAULT_MODEL = "claude-sonnet-4-5"
+
+# Clients may pick from these. An allowlist rather than free choice, so a
+# request can't point the key at some unexpected or far pricier model.
+ALLOWED_MODELS = {
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5-20251001",
+}
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -42,6 +49,7 @@ class ChatRequest(BaseModel):
     system: str = ""
     messages: list[Message]
     max_tokens: int = 1000
+    model: str = DEFAULT_MODEL
 
 
 def require_premium_user(authorization: str):
@@ -61,15 +69,30 @@ def require_premium_user(authorization: str):
 
     user_id = result.user.id
 
-    profile = (
-        supabase.table("profiles")
-        .select("is_premium")
-        .eq("id", user_id)
-        .single()
-        .execute()
-    )
+    try:
+        profile = (
+            supabase.table("profiles")
+            .select("is_premium")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Profile lookup failed: {e}")
 
-    if not profile.data or not profile.data.get("is_premium"):
+    rows = profile.data or []
+
+    if not rows:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "No profile found for this account. If the row exists in "
+                "Supabase, the server is probably using the publishable key "
+                "instead of the secret key."
+            ),
+        )
+
+    if not rows[0].get("is_premium"):
         raise HTTPException(
             status_code=403,
             detail="Alpha Desktop is a premium feature.",
@@ -87,9 +110,11 @@ def health():
 def chat(req: ChatRequest, authorization: str = Header(default="")):
     require_premium_user(authorization)
 
+    model = req.model if req.model in ALLOWED_MODELS else DEFAULT_MODEL
+
     try:
         resp = claude.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=req.max_tokens,
             system=req.system,
             messages=[m.model_dump() for m in req.messages],
